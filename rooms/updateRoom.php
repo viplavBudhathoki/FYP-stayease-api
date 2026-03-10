@@ -22,13 +22,12 @@ if (!$vendor_id) {
   exit;
 }
 
-if (!isset($_POST['room_id'], $_POST['hotel_id'], $_POST['name'], $_POST['price'], $_POST['type'], $_POST['status'])) {
-  echo json_encode(['success'=>false,'message'=>'room_id, hotel_id, name, price, type, status required']);
+if (!isset($_POST['room_id'], $_POST['name'], $_POST['price'], $_POST['type'], $_POST['status'])) {
+  echo json_encode(['success'=>false,'message'=>'room_id, name, price, type, status required']);
   exit;
 }
 
 $room_id  = (int)$_POST['room_id'];
-$hotel_id = (int)$_POST['hotel_id'];
 
 $name = mysqli_real_escape_string($con, $_POST['name']);
 $price = (float)$_POST['price'];
@@ -37,7 +36,7 @@ $status = strtolower(mysqli_real_escape_string($con, $_POST['status']));
 $capacity = isset($_POST['capacity']) ? (int)$_POST['capacity'] : 1;
 $description = isset($_POST['description']) ? mysqli_real_escape_string($con, $_POST['description']) : null;
 
-// amenities: JSON -> "WiFi, AC"
+// amenities JSON -> CSV (safe)
 $amenities_safe = null;
 if (isset($_POST['amenities'])) {
   $arr = json_decode($_POST['amenities'], true);
@@ -46,12 +45,14 @@ if (isset($_POST['amenities'])) {
   }
 }
 
-// own check
-$check = mysqli_query($con, "SELECT room_id FROM rooms WHERE room_id='$room_id' AND vendor_id='$vendor_id' AND hotel_id='$hotel_id' LIMIT 1");
+// ownership check ONLY by room_id + vendor_id
+$check = mysqli_query($con, "SELECT room_id, image_url FROM rooms WHERE room_id='$room_id' AND vendor_id='$vendor_id' LIMIT 1");
 if (!$check || mysqli_num_rows($check) === 0) {
   echo json_encode(['success'=>false,'message'=>'You do not own this room']);
   exit;
 }
+$existing = mysqli_fetch_assoc($check);
+$old_image = $existing['image_url'] ?? "";
 
 // optional image update
 $image_sql = "";
@@ -81,6 +82,10 @@ if (isset($_FILES['image']) && $_FILES['image']['tmp_name']) {
     exit;
   }
 
+  if ($old_image && $old_image !== "uploads/rooms/placeholder.png" && file_exists(__DIR__ . "/../" . $old_image)) {
+    @unlink(__DIR__ . "/../" . $old_image);
+  }
+
   $image_sql = ", image_url='$db_path'";
 }
 
@@ -94,7 +99,7 @@ $sql = "
     description=" . ($description ? "'$description'" : "NULL") . ",
     amenities=" . ($amenities_safe ? "'$amenities_safe'" : "NULL") . "
     $image_sql
-  WHERE room_id='$room_id' AND vendor_id='$vendor_id' AND hotel_id='$hotel_id'
+  WHERE room_id='$room_id' AND vendor_id='$vendor_id'
 ";
 
 $result = mysqli_query($con, $sql);
