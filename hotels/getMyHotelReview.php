@@ -5,7 +5,7 @@ include __DIR__ . '/../helpers/auth.php';
 
 header("Content-Type: application/json; charset=UTF-8");
 
-if (!isset($_POST['token'], $_POST['hotel_id'])) {
+if (!isset($_POST['token'], $_POST['booking_id'])) {
     echo json_encode([
         "success" => false,
         "message" => "Required fields missing"
@@ -23,12 +23,14 @@ if (!$user_id) {
     exit;
 }
 
-$hotel_id = (int) $_POST['hotel_id'];
+$booking_id = (int) $_POST['booking_id'];
 
-$sql = "SELECT rating_id, rating, review_message
-        FROM ratings
-        WHERE hotel_id='$hotel_id' AND user_id='$user_id'
-        LIMIT 1";
+$sql = "
+    SELECT rating_id, booking_id, room_id, hotel_id, rating, review_message, created_at
+    FROM ratings
+    WHERE booking_id='$booking_id' AND user_id='$user_id'
+    LIMIT 1
+";
 
 $result = mysqli_query($con, $sql);
 
