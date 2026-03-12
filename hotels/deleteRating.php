@@ -5,7 +5,7 @@ include __DIR__ . '/../helpers/auth.php';
 
 header("Content-Type: application/json; charset=UTF-8");
 
-if (!isset($_POST['token'], $_POST['hotel_id'])) {
+if (!isset($_POST['token'], $_POST['booking_id'])) {
     echo json_encode([
         "success" => false,
         "message" => "Required fields missing"
@@ -23,11 +23,24 @@ if (!$user_id) {
     exit;
 }
 
-$hotel_id = (int) $_POST['hotel_id'];
+$booking_id = (int) $_POST['booking_id'];
+
+$checkBooking = mysqli_query(
+    $con,
+    "SELECT booking_id, status FROM bookings WHERE booking_id='$booking_id' AND user_id='$user_id' LIMIT 1"
+);
+
+if (!$checkBooking || mysqli_num_rows($checkBooking) === 0) {
+    echo json_encode([
+        "success" => false,
+        "message" => "Booking not found"
+    ]);
+    exit;
+}
 
 $check = mysqli_query(
     $con,
-    "SELECT rating_id FROM ratings WHERE hotel_id='$hotel_id' AND user_id='$user_id' LIMIT 1"
+    "SELECT rating_id FROM ratings WHERE booking_id='$booking_id' AND user_id='$user_id' LIMIT 1"
 );
 
 if (!$check || mysqli_num_rows($check) === 0) {
@@ -38,7 +51,7 @@ if (!$check || mysqli_num_rows($check) === 0) {
     exit;
 }
 
-$sql = "DELETE FROM ratings WHERE hotel_id='$hotel_id' AND user_id='$user_id'";
+$sql = "DELETE FROM ratings WHERE booking_id='$booking_id' AND user_id='$user_id'";
 $result = mysqli_query($con, $sql);
 
 if (!$result) {
