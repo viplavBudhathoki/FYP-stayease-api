@@ -12,8 +12,6 @@ if (
     $email = $_POST['email'];
     $password = $_POST['password'];
 
-
-
     $sql = "select * from users where email = '$email'";
 
     $result = mysqli_query($con, $sql);
@@ -70,7 +68,12 @@ if (
         "success" => true,
         "message" => "User logged in successfully",
         "token" => $token,
-        "user" => $user
+        "user" => [
+            "user_id" => $user["user_id"],
+            "full_name" => $user["full_name"],
+            "email" => $user["email"],
+            "role" => $user["role"]
+        ]
     ]);
     die();
 
