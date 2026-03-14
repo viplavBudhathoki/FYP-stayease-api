@@ -43,13 +43,9 @@ if (
         die();
     }
 
-
     $hashed_password = password_hash($password, PASSWORD_DEFAULT);
 
-
-
-    $sql = "insert into users (email, password,full_name) values ('$email', '$hashed_password','$full_name')";
-
+    $sql = "insert into users (email, password, full_name, role) values ('$email', '$hashed_password', '$full_name', 'user')";
 
     $result = mysqli_query($con, $sql);
 
