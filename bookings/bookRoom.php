@@ -44,7 +44,11 @@ if ($check_out <= $check_in) {
 }
 
 /* get room */
-$sqlRoom = "SELECT room_id, hotel_id, name, price, status FROM rooms WHERE room_id='$room_id' LIMIT 1";
+$sqlRoom = "SELECT room_id, hotel_id, name, price, status 
+            FROM rooms 
+            WHERE room_id='$room_id' 
+            LIMIT 1";
+
 $resultRoom = mysqli_query($con, $sqlRoom);
 
 if (!$resultRoom || mysqli_num_rows($resultRoom) === 0) {
@@ -57,6 +61,23 @@ if (!$resultRoom || mysqli_num_rows($resultRoom) === 0) {
 
 $room = mysqli_fetch_assoc($resultRoom);
 
+/* room status validation */
+if ($room['status'] === 'occupied') {
+    echo json_encode([
+        "success" => false,
+        "message" => "This room is currently occupied and cannot be booked"
+    ]);
+    exit;
+}
+
+if ($room['status'] === 'maintenance') {
+    echo json_encode([
+        "success" => false,
+        "message" => "This room is under maintenance and cannot be booked"
+    ]);
+    exit;
+}
+
 if ($room['status'] !== 'available') {
     echo json_encode([
         "success" => false,
@@ -65,12 +86,12 @@ if ($room['status'] !== 'available') {
     exit;
 }
 
-/* optional overlap check */
+/* date overlap check */
 $sqlOverlap = "
     SELECT booking_id
     FROM bookings
     WHERE room_id = '$room_id'
-      AND status IN ('confirmed', 'completed')
+      AND status IN ('confirmed', 'checked_in')
       AND (
             ('$check_in' < check_out) AND ('$check_out' > check_in)
           )
@@ -82,7 +103,7 @@ $resultOverlap = mysqli_query($con, $sqlOverlap);
 if ($resultOverlap && mysqli_num_rows($resultOverlap) > 0) {
     echo json_encode([
         "success" => false,
-        "message" => "Room already booked for selected dates"
+        "message" => "This room is already booked for the selected dates"
     ]);
     exit;
 }
