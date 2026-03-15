@@ -80,6 +80,44 @@ $data['rating'] = (float) $data['rating'];
 $data['review_count'] = (int) $data['review_count'];
 $data['starting_price'] = (float) $data['starting_price'];
 
+/* hotel gallery images */
+$gallery = [];
+
+$imgSql = "
+    SELECT image_id, image_url
+    FROM hotel_images
+    WHERE hotel_id = '$hotel_id'
+    ORDER BY image_id DESC
+";
+
+$imgResult = mysqli_query($con, $imgSql);
+
+if ($imgResult) {
+    while ($imgRow = mysqli_fetch_assoc($imgResult)) {
+        if (!empty($imgRow['image_url']) && file_exists(__DIR__ . '/../' . $imgRow['image_url'])) {
+            $gallery[] = $imgRow;
+        }
+    }
+}
+
+/* ensure main image is available in gallery too */
+$mainAlreadyExists = false;
+foreach ($gallery as $img) {
+    if ($img['image_url'] === $data['image_url']) {
+        $mainAlreadyExists = true;
+        break;
+    }
+}
+
+if (!$mainAlreadyExists) {
+    array_unshift($gallery, [
+        'image_id' => 0,
+        'image_url' => $data['image_url']
+    ]);
+}
+
+$data['gallery'] = $gallery;
+
 echo json_encode([
     'success' => true,
     'data' => $data
