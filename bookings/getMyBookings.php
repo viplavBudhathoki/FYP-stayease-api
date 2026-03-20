@@ -37,7 +37,11 @@ $sql = "
         r.image_url AS room_image,
         h.hotel_id,
         h.name AS hotel_name,
-        h.location AS hotel_location
+        h.location AS hotel_location,
+        CASE
+            WHEN b.status = 'confirmed' AND CURDATE() < b.check_in THEN 1
+            ELSE 0
+        END AS can_modify_dates
     FROM bookings b
     INNER JOIN rooms r ON r.room_id = b.room_id
     INNER JOIN hotels h ON h.hotel_id = r.hotel_id
@@ -51,6 +55,7 @@ $data = [];
 
 if ($result) {
     while ($row = mysqli_fetch_assoc($result)) {
+        $row['can_modify_dates'] = (int)($row['can_modify_dates'] ?? 0);
         $data[] = $row;
     }
 }
