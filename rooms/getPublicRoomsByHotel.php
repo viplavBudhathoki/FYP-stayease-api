@@ -25,7 +25,7 @@ if (!$hotelCheck || mysqli_num_rows($hotelCheck) === 0) {
 $sql = "SELECT room_id, hotel_id, vendor_id, name, type, status, price, capacity, description, amenities, image_url, created_at
         FROM rooms
         WHERE hotel_id='$hotel_id'
-          AND status IN ('available', 'occupied')
+          AND status IN ('available', 'occupied', 'maintenance')
         ORDER BY room_id DESC";
 
 $result = mysqli_query($con, $sql);

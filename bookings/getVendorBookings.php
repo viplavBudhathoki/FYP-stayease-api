@@ -15,17 +15,17 @@ if (!isset($_POST['token'])) {
 
 $token = $_POST['token'];
 
-if (!isAdmin($token)) {
+if (!isVendor($token)) {
     echo json_encode([
         "success" => false,
-        "message" => "Unauthorized admin"
+        "message" => "Unauthorized vendor"
     ]);
     exit;
 }
 
-$admin_id = getUserIdByToken($token);
+$vendor_id = getUserIdByToken($token);
 
-if (!$admin_id) {
+if (!$vendor_id) {
     echo json_encode([
         "success" => false,
         "message" => "Invalid token"
@@ -37,7 +37,7 @@ $status = isset($_POST['status']) ? trim($_POST['status']) : "";
 $from_date = isset($_POST['from_date']) ? trim($_POST['from_date']) : "";
 $to_date = isset($_POST['to_date']) ? trim($_POST['to_date']) : "";
 
-$where = ["1=1"];
+$where = ["r.vendor_id = '$vendor_id'"];
 
 if ($status !== "" && $status !== "all") {
     $status_safe = mysqli_real_escape_string($con, $status);
@@ -65,9 +65,9 @@ $sql = "
         b.status,
         b.created_at,
 
-        c.user_id AS customer_id,
-        c.full_name AS customer_name,
-        c.email AS customer_email,
+        u.user_id,
+        u.full_name AS customer_name,
+        u.email AS customer_email,
 
         r.room_id,
         r.name AS room_name,
@@ -76,17 +76,12 @@ $sql = "
 
         h.hotel_id,
         h.name AS hotel_name,
-        h.location AS hotel_location,
-
-        v.user_id AS vendor_id,
-        v.full_name AS vendor_name,
-        v.email AS vendor_email
+        h.location AS hotel_location
 
     FROM bookings b
-    INNER JOIN users c ON c.user_id = b.user_id
+    INNER JOIN users u ON u.user_id = b.user_id
     INNER JOIN rooms r ON r.room_id = b.room_id
     INNER JOIN hotels h ON h.hotel_id = r.hotel_id
-    INNER JOIN users v ON v.user_id = r.vendor_id
 
     WHERE $where_sql
     ORDER BY b.booking_id DESC
@@ -97,7 +92,7 @@ $result = mysqli_query($con, $sql);
 if (!$result) {
     echo json_encode([
         "success" => false,
-        "message" => "Failed to fetch admin bookings",
+        "message" => "Failed to fetch vendor bookings",
         "error" => mysqli_error($con)
     ]);
     exit;
