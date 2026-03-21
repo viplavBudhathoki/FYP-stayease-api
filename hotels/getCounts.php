@@ -1,6 +1,6 @@
 <?php
-include '../helpers/connection.php';
-include '../helpers/auth.php';
+include __DIR__ . '/../helpers/connection.php';
+include __DIR__ . '/../helpers/auth.php';
 
 header("Content-Type: application/json; charset=UTF-8");
 
@@ -24,22 +24,20 @@ if (!isAdmin($token)) {
 
 function getCount($con, $sql) {
     $res = mysqli_query($con, $sql);
-    if (!$res) return 0;
+
+    if (!$res) {
+        return 0;
+    }
 
     $row = mysqli_fetch_assoc($res);
-    return (float)($row['total'] ?? 0);
+    return (float) ($row['total'] ?? 0);
 }
 
-$totalUsers = (int)getCount($con, "SELECT COUNT(*) as total FROM users WHERE role='user'");
-$totalVendors = (int)getCount($con, "SELECT COUNT(*) as total FROM users WHERE role='vendor'");
-$totalHotels = (int)getCount($con, "SELECT COUNT(*) as total FROM hotels");
-$totalBookings = (int)getCount($con, "SELECT COUNT(*) as total FROM bookings");
+$totalUsers = (int) getCount($con, "SELECT COUNT(*) as total FROM users WHERE role='user'");
+$totalVendors = (int) getCount($con, "SELECT COUNT(*) as total FROM users WHERE role='vendor'");
+$totalHotels = (int) getCount($con, "SELECT COUNT(*) as total FROM hotels");
+$totalBookings = (int) getCount($con, "SELECT COUNT(*) as total FROM bookings");
 
-/*
-  Revenue logic:
-  Count only bookings that are already checked in or completed.
-  Cancelled bookings should not count.
-*/
 $revenue = getCount($con, "
     SELECT COALESCE(SUM(total_price), 0) as total
     FROM bookings
@@ -56,3 +54,4 @@ echo json_encode([
         'revenue' => $revenue
     ]
 ]);
+exit;
