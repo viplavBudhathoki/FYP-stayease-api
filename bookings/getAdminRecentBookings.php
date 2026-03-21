@@ -3,6 +3,8 @@
 include __DIR__ . '/../helpers/connection.php';
 include __DIR__ . '/../helpers/auth.php';
 
+header("Content-Type: application/json; charset=UTF-8");
+
 if (!isset($_POST['token'])) {
     echo json_encode([
         "success" => false,
@@ -19,6 +21,20 @@ if (!isAdmin($token)) {
         "message" => "Unauthorized admin"
     ]);
     exit;
+}
+
+$range = isset($_POST['range']) ? trim($_POST['range']) : '7days';
+
+$whereSql = "";
+
+if ($range === '7days') {
+    $whereSql = "WHERE DATE(b.created_at) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+} elseif ($range === '30days') {
+    $whereSql = "WHERE DATE(b.created_at) >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)";
+} elseif ($range === 'all') {
+    $whereSql = "";
+} else {
+    $whereSql = "WHERE DATE(b.created_at) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
 }
 
 $sql = "
@@ -38,8 +54,8 @@ $sql = "
     INNER JOIN rooms r ON r.room_id = b.room_id
     INNER JOIN hotels h ON h.hotel_id = r.hotel_id
     INNER JOIN users v ON v.user_id = r.vendor_id
+    $whereSql
     ORDER BY b.booking_id DESC
-    LIMIT 5
 ";
 
 $result = mysqli_query($con, $sql);
@@ -62,3 +78,4 @@ echo json_encode([
     "success" => true,
     "data" => $data
 ]);
+exit;
