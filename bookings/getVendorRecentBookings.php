@@ -3,6 +3,8 @@
 include __DIR__ . '/../helpers/connection.php';
 include __DIR__ . '/../helpers/auth.php';
 
+header("Content-Type: application/json; charset=UTF-8");
+
 if (!isset($_POST['token'])) {
     echo json_encode([
         "success" => false,
@@ -31,6 +33,20 @@ if (!$vendor_id) {
     exit;
 }
 
+$range = isset($_POST['range']) ? trim($_POST['range']) : '7days';
+
+$whereDateSql = "";
+
+if ($range === '7days') {
+    $whereDateSql = "AND DATE(b.created_at) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+} elseif ($range === '30days') {
+    $whereDateSql = "AND DATE(b.created_at) >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)";
+} elseif ($range === 'all') {
+    $whereDateSql = "";
+} else {
+    $whereDateSql = "AND DATE(b.created_at) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)";
+}
+
 $sql = "
     SELECT
         b.booking_id,
@@ -47,8 +63,8 @@ $sql = "
     INNER JOIN rooms r ON r.room_id = b.room_id
     INNER JOIN hotels h ON h.hotel_id = r.hotel_id
     WHERE r.vendor_id = '$vendor_id'
+    $whereDateSql
     ORDER BY b.booking_id DESC
-    LIMIT 5
 ";
 
 $result = mysqli_query($con, $sql);
