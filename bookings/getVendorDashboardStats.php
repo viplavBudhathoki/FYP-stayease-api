@@ -46,7 +46,7 @@ $sql = "
         COUNT(DISTINCT CASE WHEN b.status = 'cancelled' THEN b.booking_id END) AS cancelledBookings,
 
         COALESCE(SUM(
-            CASE 
+            CASE
                 WHEN b.status IN ('checked_in', 'completed') THEN b.total_price
                 ELSE 0
             END
