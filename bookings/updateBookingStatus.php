@@ -71,6 +71,7 @@ if (!$resultCheck || mysqli_num_rows($resultCheck) === 0) {
 
 $booking = mysqli_fetch_assoc($resultCheck);
 $current_status = $booking['status'];
+$current_room_status = strtolower(trim($booking['room_status'] ?? ''));
 $room_id = (int) $booking['room_id'];
 
 if ($current_status === 'cancelled') {
@@ -129,10 +130,22 @@ try {
 
     $new_room_status = null;
 
+    // Safe room-status sync rules
     if ($new_status === 'checked_in') {
-        $new_room_status = 'occupied';
-    } elseif ($new_status === 'completed' || $new_status === 'cancelled') {
-        $new_room_status = 'available';
+        // Only mark occupied if room is not under maintenance
+        if ($current_room_status !== 'maintenance') {
+            $new_room_status = 'occupied';
+        }
+    } elseif ($new_status === 'completed') {
+        // Do not overwrite maintenance
+        if ($current_room_status !== 'maintenance') {
+            $new_room_status = 'available';
+        }
+    } elseif ($new_status === 'cancelled') {
+        // Only reset to available if room had become occupied because of booking flow
+        if ($current_room_status === 'occupied') {
+            $new_room_status = 'available';
+        }
     }
 
     if ($new_room_status !== null) {
