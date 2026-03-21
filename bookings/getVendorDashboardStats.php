@@ -3,6 +3,8 @@
 include __DIR__ . '/../helpers/connection.php';
 include __DIR__ . '/../helpers/auth.php';
 
+header("Content-Type: application/json; charset=UTF-8");
+
 if (!isset($_POST['token'])) {
     echo json_encode([
         "success" => false,
@@ -39,10 +41,16 @@ $sql = "
         SUM(CASE WHEN r.status = 'maintenance' THEN 1 ELSE 0 END) AS maintenance,
 
         COUNT(DISTINCT CASE WHEN b.status = 'confirmed' THEN b.booking_id END) AS confirmedBookings,
+        COUNT(DISTINCT CASE WHEN b.status = 'checked_in' THEN b.booking_id END) AS checkedInBookings,
         COUNT(DISTINCT CASE WHEN b.status = 'completed' THEN b.booking_id END) AS completedBookings,
         COUNT(DISTINCT CASE WHEN b.status = 'cancelled' THEN b.booking_id END) AS cancelledBookings,
 
-        COALESCE(SUM(CASE WHEN b.status IN ('confirmed', 'completed') THEN b.total_price ELSE 0 END), 0) AS revenue
+        COALESCE(SUM(
+            CASE 
+                WHEN b.status IN ('checked_in', 'completed') THEN b.total_price
+                ELSE 0
+            END
+        ), 0) AS revenue
 
     FROM rooms r
     LEFT JOIN bookings b ON b.room_id = r.room_id
@@ -69,6 +77,7 @@ echo json_encode([
         "occupied" => (int)($data['occupied'] ?? 0),
         "maintenance" => (int)($data['maintenance'] ?? 0),
         "confirmedBookings" => (int)($data['confirmedBookings'] ?? 0),
+        "checkedInBookings" => (int)($data['checkedInBookings'] ?? 0),
         "completedBookings" => (int)($data['completedBookings'] ?? 0),
         "cancelledBookings" => (int)($data['cancelledBookings'] ?? 0),
         "revenue" => (float)($data['revenue'] ?? 0),
