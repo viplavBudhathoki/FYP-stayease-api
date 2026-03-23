@@ -18,6 +18,11 @@ $port = 3306;
 $con = mysqli_connect($host, $user, $pass, $db, $port);
 
 if (!$con) {
-    echo json_encode(["success" => false, "message" => "Connection failed"]);
+    echo json_encode([
+        "success" => false,
+        "message" => "Connection failed"
+    ]);
     exit;
 }
+
+mysqli_set_charset($con, "utf8mb4");
