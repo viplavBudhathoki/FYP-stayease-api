@@ -2,31 +2,43 @@
 
 include '../helpers/connection.php';
 
-if (
-    isset(
-    $_POST['email'],
-    $_POST['password']
-)
-) {
+if (isset($_POST['email'], $_POST['password'])) {
 
-    $email = $_POST['email'];
+    $email = trim($_POST['email']);
     $password = $_POST['password'];
 
-    $sql = "select * from users where email = '$email'";
-
-    $result = mysqli_query($con, $sql);
-
-    if (!$result) {
+    if ($email === '' || $password === '') {
         echo json_encode([
             "success" => false,
-            "message" => "error in query"
+            "message" => "Email and password are required"
         ]);
         die();
     }
 
-    $count = mysqli_num_rows($result);
+    $sql = "SELECT * FROM users WHERE email = ?";
+    $stmt = mysqli_prepare($con, $sql);
 
-    if ($count == 0) {
+    if (!$stmt) {
+        echo json_encode([
+            "success" => false,
+            "message" => "Failed to prepare query"
+        ]);
+        die();
+    }
+
+    mysqli_stmt_bind_param($stmt, "s", $email);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+
+    if (!$result) {
+        echo json_encode([
+            "success" => false,
+            "message" => "Error in query"
+        ]);
+        die();
+    }
+
+    if (mysqli_num_rows($result) == 0) {
         echo json_encode([
             "success" => false,
             "message" => "User not found"
@@ -34,9 +46,7 @@ if (
         die();
     }
 
-
     $user = mysqli_fetch_assoc($result);
-
     $hashed_password = $user['password'];
 
     $is_password_correct = password_verify($password, $hashed_password);
@@ -50,11 +60,21 @@ if (
     }
 
     $token = bin2hex(random_bytes(32));
-
     $user_id = $user['user_id'];
 
-    $sql = "insert into tokens (token, user_id) values ('$token', '$user_id')";
-    $result = mysqli_query($con, $sql);
+    $sql = "INSERT INTO tokens (token, user_id) VALUES (?, ?)";
+    $stmt = mysqli_prepare($con, $sql);
+
+    if (!$stmt) {
+        echo json_encode([
+            "success" => false,
+            "message" => "Failed to prepare token query"
+        ]);
+        die();
+    }
+
+    mysqli_stmt_bind_param($stmt, "si", $token, $user_id);
+    $result = mysqli_stmt_execute($stmt);
 
     if (!$result) {
         echo json_encode([
@@ -80,8 +100,7 @@ if (
 } else {
     echo json_encode([
         "success" => false,
-        "message" => "email and password are required",
-
+        "message" => "Email and password are required"
     ]);
     die();
 }
