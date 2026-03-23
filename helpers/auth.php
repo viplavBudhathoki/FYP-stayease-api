@@ -1,81 +1,83 @@
 <?php
-// Include the database connection file to access $con
 include 'connection.php';
 
-// Function to get user ID from a token
 function getUserIdByToken($token)
 {
-    global $con; // Use the global database connection
+    global $con;
 
-    // Query to find user_id associated with the given token
-    $sql = "SELECT user_id FROM tokens WHERE token ='$token'";
+    $sql = "SELECT user_id FROM tokens WHERE token = ?";
+    $stmt = mysqli_prepare($con, $sql);
 
-    // Execute the query
-    $result = mysqli_query($con, $sql);
-
-    // If a row is found, return the user_id
-    if (mysqli_num_rows($result) > 0) {
-        $row = mysqli_fetch_assoc($result); // Fetch the row as associative array
-        return $row['user_id']; // Return the user_id
+    if (!$stmt) {
+        return null;
     }
 
-    // If no user found for the token, return null
+    mysqli_stmt_bind_param($stmt, "s", $token);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+
+    if ($result && mysqli_num_rows($result) > 0) {
+        $row = mysqli_fetch_assoc($result);
+        return $row['user_id'];
+    }
+
     return null;
 }
 
-// Function to check if a user is a vendor
-function isVendor($token){
-    global $con; // Use global DB connection
+function isVendor($token)
+{
+    global $con;
 
-    // Get user_id using token
     $user_id = getUserIdByToken($token);
 
-    // If token is invalid or user not found, return false
     if (!$user_id) {
         return false;
     }
 
-    // Query to get user details by user_id
-    $sql = "SELECT * FROM users WHERE user_id = '$user_id'";
+    $sql = "SELECT role FROM users WHERE user_id = ?";
+    $stmt = mysqli_prepare($con, $sql);
 
-    // Execute the query
-    $result = mysqli_query($con, $sql);
-
-    // If a user is found, check if the role is 'vendor'
-    if (mysqli_num_rows($result) > 0) {
-        $row = mysqli_fetch_assoc($result); // Fetch user data
-        return $row['role'] == 'vendor';   // Return true if role is vendor
-    }
-
-    // If no user found, return false
-    return false;
-}
-
-// Function to check if a user is an admin
-function isAdmin($token)
-{
-    global $con; // Use global DB connection
-
-    // Get user_id using token
-    $user_id = getUserIdByToken($token);
-
-    // If token invalid or user not found, return false
-    if (!$user_id) {    
+    if (!$stmt) {
         return false;
     }
 
-    // Query to get user details by user_id
-    $sql = "SELECT * FROM users WHERE user_id ='$user_id'";
+    mysqli_stmt_bind_param($stmt, "i", $user_id);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
 
-    // Execute the query
-    $result = mysqli_query($con, $sql);
-
-    // If user found, check if role is 'admin'
-    if (mysqli_num_rows($result) > 0) {
-        $row = mysqli_fetch_assoc($result); // Fetch user data
-        return $row['role'] == 'admin';     // Return true if role is admin
+    if ($result && mysqli_num_rows($result) > 0) {
+        $row = mysqli_fetch_assoc($result);
+        return $row['role'] === 'vendor';
     }
 
-    // If no user found, return false
+    return false;
+}
+
+function isAdmin($token)
+{
+    global $con;
+
+    $user_id = getUserIdByToken($token);
+
+    if (!$user_id) {
+        return false;
+    }
+
+    $sql = "SELECT role FROM users WHERE user_id = ?";
+    $stmt = mysqli_prepare($con, $sql);
+
+    if (!$stmt) {
+        return false;
+    }
+
+    mysqli_stmt_bind_param($stmt, "i", $user_id);
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+
+    if ($result && mysqli_num_rows($result) > 0) {
+        $row = mysqli_fetch_assoc($result);
+        return $row['role'] === 'admin';
+    }
+
     return false;
 }
