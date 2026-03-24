@@ -38,20 +38,53 @@ $from_date = isset($_POST['from_date']) ? trim($_POST['from_date']) : "";
 $to_date = isset($_POST['to_date']) ? trim($_POST['to_date']) : "";
 
 $where = ["1=1"];
+$params = [];
+$types = "";
 
 if ($status !== "" && $status !== "all") {
-    $status_safe = mysqli_real_escape_string($con, $status);
-    $where[] = "b.status = '$status_safe'";
+    $allowed_statuses = ['confirmed', 'checked_in', 'completed', 'cancelled'];
+
+    if (!in_array($status, $allowed_statuses, true)) {
+        echo json_encode([
+            "success" => false,
+            "message" => "Invalid status filter"
+        ]);
+        exit;
+    }
+
+    $where[] = "b.status = ?";
+    $params[] = $status;
+    $types .= "s";
 }
 
 if ($from_date !== "") {
-    $from_date_safe = mysqli_real_escape_string($con, $from_date);
-    $where[] = "b.check_in >= '$from_date_safe'";
+    $d = DateTime::createFromFormat('Y-m-d', $from_date);
+    if (!$d || $d->format('Y-m-d') !== $from_date) {
+        echo json_encode([
+            "success" => false,
+            "message" => "Invalid from_date format"
+        ]);
+        exit;
+    }
+
+    $where[] = "b.check_in >= ?";
+    $params[] = $from_date;
+    $types .= "s";
 }
 
 if ($to_date !== "") {
-    $to_date_safe = mysqli_real_escape_string($con, $to_date);
-    $where[] = "b.check_out <= '$to_date_safe'";
+    $d = DateTime::createFromFormat('Y-m-d', $to_date);
+    if (!$d || $d->format('Y-m-d') !== $to_date) {
+        echo json_encode([
+            "success" => false,
+            "message" => "Invalid to_date format"
+        ]);
+        exit;
+    }
+
+    $where[] = "b.check_out <= ?";
+    $params[] = $to_date;
+    $types .= "s";
 }
 
 $where_sql = implode(" AND ", $where);
@@ -64,15 +97,16 @@ $sql = "
         b.total_price,
         b.status,
         b.created_at,
+        b.rooms_requested,
 
         c.user_id AS customer_id,
         c.full_name AS customer_name,
         c.email AS customer_email,
 
-        r.room_id,
-        r.name AS room_name,
-        r.type AS room_type,
-        r.image_url AS room_image,
+        MIN(r.room_id) AS room_id,
+        GROUP_CONCAT(r.name ORDER BY r.name SEPARATOR ', ') AS room_name,
+        GROUP_CONCAT(DISTINCT r.type ORDER BY r.type SEPARATOR ', ') AS room_type,
+        MIN(r.image_url) AS room_image,
 
         h.hotel_id,
         h.name AS hotel_name,
@@ -84,21 +118,53 @@ $sql = "
 
     FROM bookings b
     INNER JOIN users c ON c.user_id = b.user_id
-    INNER JOIN rooms r ON r.room_id = b.room_id
+    INNER JOIN booking_rooms br ON br.booking_id = b.booking_id
+    INNER JOIN rooms r ON r.room_id = br.room_id
     INNER JOIN hotels h ON h.hotel_id = r.hotel_id
     INNER JOIN users v ON v.user_id = r.vendor_id
 
     WHERE $where_sql
+    GROUP BY
+        b.booking_id,
+        b.check_in,
+        b.check_out,
+        b.total_price,
+        b.status,
+        b.created_at,
+        b.rooms_requested,
+        c.user_id,
+        c.full_name,
+        c.email,
+        h.hotel_id,
+        h.name,
+        h.location,
+        v.user_id,
+        v.full_name,
+        v.email
     ORDER BY b.booking_id DESC
 ";
 
-$result = mysqli_query($con, $sql);
+$stmt = mysqli_prepare($con, $sql);
+
+if (!$stmt) {
+    echo json_encode([
+        "success" => false,
+        "message" => "Failed to prepare admin bookings query"
+    ]);
+    exit;
+}
+
+if (!empty($params)) {
+    mysqli_stmt_bind_param($stmt, $types, ...$params);
+}
+
+mysqli_stmt_execute($stmt);
+$result = mysqli_stmt_get_result($stmt);
 
 if (!$result) {
     echo json_encode([
         "success" => false,
-        "message" => "Failed to fetch admin bookings",
-        "error" => mysqli_error($con)
+        "message" => "Failed to fetch admin bookings"
     ]);
     exit;
 }
@@ -106,6 +172,7 @@ if (!$result) {
 $data = [];
 
 while ($row = mysqli_fetch_assoc($result)) {
+    $row['rooms_requested'] = (int) ($row['rooms_requested'] ?? 1);
     $data[] = $row;
 }
 
