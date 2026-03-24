@@ -50,16 +50,29 @@ $sqlCheck = "
     SELECT 
         b.booking_id,
         b.status,
-        r.room_id,
-        r.status AS room_status
+        COUNT(br.room_id) AS room_count
     FROM bookings b
-    INNER JOIN rooms r ON r.room_id = b.room_id
-    WHERE b.booking_id = '$booking_id'
-      AND r.vendor_id = '$vendor_id'
+    INNER JOIN booking_rooms br ON br.booking_id = b.booking_id
+    INNER JOIN rooms r ON r.room_id = br.room_id
+    WHERE b.booking_id = ?
+      AND r.vendor_id = ?
+    GROUP BY b.booking_id, b.status
     LIMIT 1
 ";
 
-$resultCheck = mysqli_query($con, $sqlCheck);
+$stmtCheck = mysqli_prepare($con, $sqlCheck);
+
+if (!$stmtCheck) {
+    echo json_encode([
+        "success" => false,
+        "message" => "Failed to prepare booking check query"
+    ]);
+    exit;
+}
+
+mysqli_stmt_bind_param($stmtCheck, "ii", $booking_id, $vendor_id);
+mysqli_stmt_execute($stmtCheck);
+$resultCheck = mysqli_stmt_get_result($stmtCheck);
 
 if (!$resultCheck || mysqli_num_rows($resultCheck) === 0) {
     echo json_encode([
@@ -71,8 +84,6 @@ if (!$resultCheck || mysqli_num_rows($resultCheck) === 0) {
 
 $booking = mysqli_fetch_assoc($resultCheck);
 $current_status = $booking['status'];
-$current_room_status = strtolower(trim($booking['room_status'] ?? ''));
-$room_id = (int) $booking['room_id'];
 
 if ($current_status === 'cancelled') {
     echo json_encode([
@@ -89,13 +100,6 @@ if ($current_status === 'completed') {
     ]);
     exit;
 }
-
-/*
-Allowed transitions:
-confirmed -> checked_in
-confirmed -> cancelled
-checked_in -> completed
-*/
 
 if ($current_status === 'confirmed' && !in_array($new_status, ['checked_in', 'cancelled'], true)) {
     echo json_encode([
@@ -118,11 +122,18 @@ mysqli_begin_transaction($con);
 try {
     $sqlUpdateBooking = "
         UPDATE bookings
-        SET status = '$new_status'
-        WHERE booking_id = '$booking_id'
+        SET status = ?
+        WHERE booking_id = ?
     ";
 
-    $resultUpdateBooking = mysqli_query($con, $sqlUpdateBooking);
+    $stmtUpdateBooking = mysqli_prepare($con, $sqlUpdateBooking);
+
+    if (!$stmtUpdateBooking) {
+        throw new Exception("Failed to prepare booking update");
+    }
+
+    mysqli_stmt_bind_param($stmtUpdateBooking, "si", $new_status, $booking_id);
+    $resultUpdateBooking = mysqli_stmt_execute($stmtUpdateBooking);
 
     if (!$resultUpdateBooking) {
         throw new Exception("Failed to update booking status");
@@ -130,35 +141,56 @@ try {
 
     $new_room_status = null;
 
-    // Safe room-status sync rules
     if ($new_status === 'checked_in') {
-        // Only mark occupied if room is not under maintenance
-        if ($current_room_status !== 'maintenance') {
-            $new_room_status = 'occupied';
-        }
-    } elseif ($new_status === 'completed') {
-        // Do not overwrite maintenance
-        if ($current_room_status !== 'maintenance') {
-            $new_room_status = 'available';
-        }
-    } elseif ($new_status === 'cancelled') {
-        // Only reset to available if room had become occupied because of booking flow
-        if ($current_room_status === 'occupied') {
-            $new_room_status = 'available';
-        }
+        $new_room_status = 'occupied';
+    } elseif ($new_status === 'completed' || $new_status === 'cancelled') {
+        $new_room_status = 'available';
     }
 
     if ($new_room_status !== null) {
-        $sqlUpdateRoom = "
-            UPDATE rooms
-            SET status = '$new_room_status'
-            WHERE room_id = '$room_id'
+        $sqlGetRooms = "
+            SELECT r.room_id, r.status
+            FROM booking_rooms br
+            INNER JOIN rooms r ON r.room_id = br.room_id
+            WHERE br.booking_id = ?
         ";
 
-        $resultUpdateRoom = mysqli_query($con, $sqlUpdateRoom);
+        $stmtGetRooms = mysqli_prepare($con, $sqlGetRooms);
 
-        if (!$resultUpdateRoom) {
-            throw new Exception("Failed to update room status");
+        if (!$stmtGetRooms) {
+            throw new Exception("Failed to prepare room fetch query");
+        }
+
+        mysqli_stmt_bind_param($stmtGetRooms, "i", $booking_id);
+        mysqli_stmt_execute($stmtGetRooms);
+        $resultRooms = mysqli_stmt_get_result($stmtGetRooms);
+
+        $sqlUpdateRoom = "
+            UPDATE rooms
+            SET status = ?
+            WHERE room_id = ?
+        ";
+
+        $stmtUpdateRoom = mysqli_prepare($con, $sqlUpdateRoom);
+
+        if (!$stmtUpdateRoom) {
+            throw new Exception("Failed to prepare room update");
+        }
+
+        while ($room = mysqli_fetch_assoc($resultRooms)) {
+            $room_id = (int) $room['room_id'];
+            $current_room_status = strtolower(trim($room['status'] ?? ''));
+
+            if ($current_room_status === 'maintenance') {
+                continue;
+            }
+
+            mysqli_stmt_bind_param($stmtUpdateRoom, "si", $new_room_status, $room_id);
+            $resultRoom = mysqli_stmt_execute($stmtUpdateRoom);
+
+            if (!$resultRoom) {
+                throw new Exception("Failed to update room status");
+            }
         }
     }
 
