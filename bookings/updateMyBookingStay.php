@@ -25,6 +25,7 @@ if (!$user_id) {
 
 $booking_id = (int) $_POST['booking_id'];
 $new_check_out = trim($_POST['check_out']);
+$new_check_in = isset($_POST['check_in']) ? trim($_POST['check_in']) : null;
 
 if (!$booking_id || !$new_check_out) {
     echo json_encode([
@@ -34,24 +35,53 @@ if (!$booking_id || !$new_check_out) {
     exit;
 }
 
+$checkOutDate = DateTime::createFromFormat('Y-m-d', $new_check_out);
+if (!$checkOutDate || $checkOutDate->format('Y-m-d') !== $new_check_out) {
+    echo json_encode([
+        "success" => false,
+        "message" => "Invalid check-out date"
+    ]);
+    exit;
+}
+
+if ($new_check_in !== null && $new_check_in !== '') {
+    $checkInDate = DateTime::createFromFormat('Y-m-d', $new_check_in);
+    if (!$checkInDate || $checkInDate->format('Y-m-d') !== $new_check_in) {
+        echo json_encode([
+            "success" => false,
+            "message" => "Invalid check-in date"
+        ]);
+        exit;
+    }
+}
+
 $sqlBooking = "
     SELECT 
-        b.booking_id,
-        b.user_id,
-        b.room_id,
-        b.check_in,
-        b.check_out,
-        b.total_price,
-        b.status,
-        r.price AS room_price
-    FROM bookings b
-    INNER JOIN rooms r ON r.room_id = b.room_id
-    WHERE b.booking_id = '$booking_id'
-      AND b.user_id = '$user_id'
+        booking_id,
+        user_id,
+        check_in,
+        check_out,
+        total_price,
+        status
+    FROM bookings
+    WHERE booking_id = ?
+      AND user_id = ?
     LIMIT 1
 ";
 
-$resultBooking = mysqli_query($con, $sqlBooking);
+$stmtBooking = mysqli_prepare($con, $sqlBooking);
+
+if (!$stmtBooking) {
+    echo json_encode([
+        "success" => false,
+        "message" => "Failed to prepare booking query"
+    ]);
+    exit;
+}
+
+mysqli_stmt_bind_param($stmtBooking, "ii", $booking_id, $user_id);
+mysqli_stmt_execute($stmtBooking);
+$resultBooking = mysqli_stmt_get_result($stmtBooking);
 
 if (!$resultBooking || mysqli_num_rows($resultBooking) === 0) {
     echo json_encode([
@@ -63,18 +93,29 @@ if (!$resultBooking || mysqli_num_rows($resultBooking) === 0) {
 
 $booking = mysqli_fetch_assoc($resultBooking);
 
-if ($booking['status'] !== 'confirmed') {
+if (!in_array($booking['status'], ['confirmed', 'checked_in'])) {
     echo json_encode([
         "success" => false,
-        "message" => "Only confirmed bookings can be modified"
+        "message" => "Only active bookings can be modified"
     ]);
     exit;
 }
 
-$check_in = $booking['check_in'];
-$room_id = (int) $booking['room_id'];
+$final_check_in = $booking['check_in'];
 
-if ($new_check_out <= $check_in) {
+if ($booking['status'] === 'confirmed' && $new_check_in && $new_check_in !== $booking['check_in']) {
+    $today = date('Y-m-d');
+    if ($new_check_in < $today) {
+        echo json_encode([
+            "success" => false,
+            "message" => "Check-in date cannot be in the past"
+        ]);
+        exit;
+    }
+    $final_check_in = $new_check_in;
+}
+
+if ($new_check_out <= $final_check_in) {
     echo json_encode([
         "success" => false,
         "message" => "Check-out must be after check-in"
@@ -82,31 +123,67 @@ if ($new_check_out <= $check_in) {
     exit;
 }
 
-/* overlap check excluding current booking */
+/* overlap check for all rooms in this booking */
 $sqlOverlap = "
-    SELECT booking_id
-    FROM bookings
-    WHERE room_id = '$room_id'
-      AND booking_id != '$booking_id'
-      AND status IN ('confirmed', 'checked_in')
-      AND (
-            ('$check_in' < check_out) AND ('$new_check_out' > check_in)
-          )
+    SELECT 1
+    FROM booking_rooms current_br
+    INNER JOIN booking_rooms other_br ON other_br.room_id = current_br.room_id
+    INNER JOIN bookings other_b ON other_b.booking_id = other_br.booking_id
+    WHERE current_br.booking_id = ?
+      AND other_b.booking_id != ?
+      AND other_b.status IN ('confirmed', 'checked_in')
+      AND (? < other_b.check_out)
+      AND (? > other_b.check_in)
     LIMIT 1
 ";
 
-$resultOverlap = mysqli_query($con, $sqlOverlap);
+$stmtOverlap = mysqli_prepare($con, $sqlOverlap);
 
-if ($resultOverlap && mysqli_num_rows($resultOverlap) > 0) {
+if (!$stmtOverlap) {
     echo json_encode([
         "success" => false,
-        "message" => "This room is already booked for the updated date range"
+        "message" => "Failed to prepare overlap check"
     ]);
     exit;
 }
 
-/* calculate updated price */
-$start = new DateTime($check_in);
+mysqli_stmt_bind_param($stmtOverlap, "iiss", $booking_id, $booking_id, $final_check_in, $new_check_out);
+mysqli_stmt_execute($stmtOverlap);
+$resultOverlap = mysqli_stmt_get_result($stmtOverlap);
+
+if ($resultOverlap && mysqli_num_rows($resultOverlap) > 0) {
+    echo json_encode([
+        "success" => false,
+        "message" => "One of the booked rooms is already reserved for the updated date range"
+    ]);
+    exit;
+}
+
+/* calculate updated price from booking_rooms */
+$sqlPrice = "
+    SELECT COALESCE(SUM(price_per_night), 0) AS total_price_per_night
+    FROM booking_rooms
+    WHERE booking_id = ?
+";
+
+$stmtPrice = mysqli_prepare($con, $sqlPrice);
+
+if (!$stmtPrice) {
+    echo json_encode([
+        "success" => false,
+        "message" => "Failed to prepare price query"
+    ]);
+    exit;
+}
+
+mysqli_stmt_bind_param($stmtPrice, "i", $booking_id);
+mysqli_stmt_execute($stmtPrice);
+$resultPrice = mysqli_stmt_get_result($stmtPrice);
+$priceRow = mysqli_fetch_assoc($resultPrice);
+
+$total_price_per_night = (float) ($priceRow['total_price_per_night'] ?? 0);
+
+$start = new DateTime($final_check_in);
 $end = new DateTime($new_check_out);
 $diff = $start->diff($end);
 $nights = (int) $diff->days;
@@ -119,18 +196,29 @@ if ($nights <= 0) {
     exit;
 }
 
-$room_price = (float) $booking['room_price'];
-$total_price = $nights * $room_price;
+$total_price = $nights * $total_price_per_night;
 
 $sqlUpdate = "
     UPDATE bookings
-    SET check_out = '$new_check_out',
-        total_price = '$total_price'
-    WHERE booking_id = '$booking_id'
-      AND user_id = '$user_id'
+    SET check_in = ?,
+        check_out = ?,
+        total_price = ?
+    WHERE booking_id = ?
+      AND user_id = ?
 ";
 
-$resultUpdate = mysqli_query($con, $sqlUpdate);
+$stmtUpdate = mysqli_prepare($con, $sqlUpdate);
+
+if (!$stmtUpdate) {
+    echo json_encode([
+        "success" => false,
+        "message" => "Failed to prepare booking update"
+    ]);
+    exit;
+}
+
+mysqli_stmt_bind_param($stmtUpdate, "ssdii", $final_check_in, $new_check_out, $total_price, $booking_id, $user_id);
+$resultUpdate = mysqli_stmt_execute($stmtUpdate);
 
 if (!$resultUpdate) {
     echo json_encode([
@@ -145,7 +233,7 @@ echo json_encode([
     "message" => "Booking stay updated successfully",
     "data" => [
         "booking_id" => $booking_id,
-        "check_in" => $check_in,
+        "check_in" => $final_check_in,
         "check_out" => $new_check_out,
         "nights" => $nights,
         "total_price" => $total_price
