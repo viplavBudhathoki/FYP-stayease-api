@@ -25,10 +25,27 @@ if (!$user_id) {
 
 $booking_id = (int) $_POST['booking_id'];
 
-$check = mysqli_query(
-    $con,
-    "SELECT booking_id, status FROM bookings WHERE booking_id='$booking_id' AND user_id='$user_id' LIMIT 1"
-);
+$sqlCheck = "
+    SELECT booking_id, status
+    FROM bookings
+    WHERE booking_id = ?
+      AND user_id = ?
+    LIMIT 1
+";
+
+$stmtCheck = mysqli_prepare($con, $sqlCheck);
+
+if (!$stmtCheck) {
+    echo json_encode([
+        "success" => false,
+        "message" => "Failed to prepare booking check"
+    ]);
+    exit;
+}
+
+mysqli_stmt_bind_param($stmtCheck, "ii", $booking_id, $user_id);
+mysqli_stmt_execute($stmtCheck);
+$check = mysqli_stmt_get_result($stmtCheck);
 
 if (!$check || mysqli_num_rows($check) === 0) {
     echo json_encode([
@@ -48,18 +65,34 @@ if ($booking['status'] !== 'confirmed') {
     exit;
 }
 
-$sql = "UPDATE bookings SET status='cancelled' WHERE booking_id='$booking_id' AND user_id='$user_id'";
-$result = mysqli_query($con, $sql);
+mysqli_begin_transaction($con);
 
-if (!$result) {
+try {
+    $sql = "UPDATE bookings SET status = 'cancelled' WHERE booking_id = ? AND user_id = ?";
+    $stmt = mysqli_prepare($con, $sql);
+
+    if (!$stmt) {
+        throw new Exception("Failed to prepare booking cancel query");
+    }
+
+    mysqli_stmt_bind_param($stmt, "ii", $booking_id, $user_id);
+    $result = mysqli_stmt_execute($stmt);
+
+    if (!$result) {
+        throw new Exception("Failed to cancel booking");
+    }
+
+    mysqli_commit($con);
+
+    echo json_encode([
+        "success" => true,
+        "message" => "Booking cancelled successfully"
+    ]);
+} catch (Exception $e) {
+    mysqli_rollback($con);
+
     echo json_encode([
         "success" => false,
-        "message" => "Failed to cancel booking"
+        "message" => $e->getMessage()
     ]);
-    exit;
 }
-
-echo json_encode([
-    "success" => true,
-    "message" => "Booking cancelled successfully"
-]);
