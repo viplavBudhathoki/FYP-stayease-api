@@ -36,7 +36,6 @@ if (!$vendor_id) {
 $sql = "
     SELECT
         COUNT(DISTINCT r.room_id) AS totalRooms,
-
         SUM(CASE WHEN r.status = 'occupied' THEN 1 ELSE 0 END) AS occupied,
         SUM(CASE WHEN r.status = 'maintenance' THEN 1 ELSE 0 END) AS maintenance,
 
@@ -46,24 +45,36 @@ $sql = "
         COUNT(DISTINCT CASE WHEN b.status = 'cancelled' THEN b.booking_id END) AS cancelledBookings,
 
         COALESCE(SUM(
-            CASE
-                WHEN b.status IN ('checked_in', 'completed') THEN b.total_price
-                ELSE 0
+            DISTINCT CASE
+                WHEN b.status IN ('checked_in', 'completed') THEN b.booking_id * 0 + b.total_price
+                ELSE NULL
             END
         ), 0) AS revenue
 
     FROM rooms r
-    LEFT JOIN bookings b ON b.room_id = r.room_id
-    WHERE r.vendor_id = '$vendor_id'
+    LEFT JOIN booking_rooms br ON br.room_id = r.room_id
+    LEFT JOIN bookings b ON b.booking_id = br.booking_id
+    WHERE r.vendor_id = ?
 ";
 
-$result = mysqli_query($con, $sql);
+$stmt = mysqli_prepare($con, $sql);
+
+if (!$stmt) {
+    echo json_encode([
+        "success" => false,
+        "message" => "Failed to prepare dashboard stats query"
+    ]);
+    exit;
+}
+
+mysqli_stmt_bind_param($stmt, "i", $vendor_id);
+mysqli_stmt_execute($stmt);
+$result = mysqli_stmt_get_result($stmt);
 
 if (!$result) {
     echo json_encode([
         "success" => false,
-        "message" => "Failed to fetch dashboard stats",
-        "error" => mysqli_error($con)
+        "message" => "Failed to fetch dashboard stats"
     ]);
     exit;
 }
