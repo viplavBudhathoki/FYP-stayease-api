@@ -22,6 +22,16 @@ if (!isAdmin($token)) {
     exit;
 }
 
+$admin_id = getUserIdByToken($token);
+
+if (!$admin_id) {
+    echo json_encode([
+        'success' => false,
+        'message' => 'Invalid token'
+    ]);
+    exit;
+}
+
 function getCount($con, $sql) {
     $res = mysqli_query($con, $sql);
 
@@ -33,13 +43,13 @@ function getCount($con, $sql) {
     return (float) ($row['total'] ?? 0);
 }
 
-$totalUsers = (int) getCount($con, "SELECT COUNT(*) as total FROM users WHERE role='user'");
-$totalVendors = (int) getCount($con, "SELECT COUNT(*) as total FROM users WHERE role='vendor'");
-$totalHotels = (int) getCount($con, "SELECT COUNT(*) as total FROM hotels");
-$totalBookings = (int) getCount($con, "SELECT COUNT(*) as total FROM bookings");
+$totalUsers = (int) getCount($con, "SELECT COUNT(*) AS total FROM users WHERE role = 'user'");
+$totalVendors = (int) getCount($con, "SELECT COUNT(*) AS total FROM users WHERE role = 'vendor'");
+$totalHotels = (int) getCount($con, "SELECT COUNT(*) AS total FROM hotels");
+$totalBookings = (int) getCount($con, "SELECT COUNT(*) AS total FROM bookings");
 
-$revenue = getCount($con, "
-    SELECT COALESCE(SUM(total_price), 0) as total
+$revenue = (float) getCount($con, "
+    SELECT COALESCE(SUM(total_price), 0) AS total
     FROM bookings
     WHERE status IN ('checked_in', 'completed')
 ");
