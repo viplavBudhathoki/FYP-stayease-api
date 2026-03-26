@@ -29,15 +29,20 @@ $sqlBookings = "
         b.check_in,
         b.check_out,
         b.total_price,
-        b.status,
+        LOWER(b.status) AS status,
         b.created_at,
         b.adults,
         b.children,
         b.rooms_requested,
         CASE
             WHEN b.status = 'confirmed' AND CURDATE() < b.check_in THEN 1
+            WHEN b.status = 'checked_in' THEN 1
             ELSE 0
-        END AS can_modify_dates
+        END AS can_modify_dates,
+        CASE
+            WHEN b.status = 'confirmed' THEN 1
+            ELSE 0
+        END AS can_cancel_booking
     FROM bookings b
     WHERE b.user_id = ?
     ORDER BY b.booking_id DESC
@@ -121,20 +126,25 @@ if ($resultBookings) {
             }
         }
 
+        $uniqueRoomTypes = array_values(array_unique($roomTypes));
+
+        $row['booking_id'] = (int) $row['booking_id'];
+        $row['total_price'] = (float) $row['total_price'];
         $row['can_modify_dates'] = (int) ($row['can_modify_dates'] ?? 0);
+        $row['can_cancel_booking'] = (int) ($row['can_cancel_booking'] ?? 0);
         $row['adults'] = (int) ($row['adults'] ?? 1);
         $row['children'] = (int) ($row['children'] ?? 0);
         $row['rooms_requested'] = (int) ($row['rooms_requested'] ?? 1);
 
-        // keep old frontend-friendly fields
+        // old frontend-friendly fields
         $row['hotel_id'] = $hotel_id;
         $row['hotel_name'] = $hotel_name;
         $row['hotel_location'] = $hotel_location;
         $row['room_name'] = implode(', ', $roomNames);
-        $row['room_type'] = implode(', ', array_unique($roomTypes));
+        $row['room_type'] = implode(', ', $uniqueRoomTypes);
         $row['room_image'] = $firstRoomImage;
 
-        // new proper multi-room data
+        // proper multi-room data
         $row['rooms'] = $rooms;
 
         $data[] = $row;
