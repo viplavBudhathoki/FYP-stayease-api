@@ -15,13 +15,25 @@ if ($hotel_id <= 0) {
     exit;
 }
 
-$checkHotel = mysqli_query($con, "
+$checkHotelStmt = mysqli_prepare($con, "
     SELECT hotel_id, name, location, status
     FROM hotels
-    WHERE hotel_id = '$hotel_id'
+    WHERE hotel_id = ?
       AND status = 'active'
     LIMIT 1
 ");
+
+if (!$checkHotelStmt) {
+    echo json_encode([
+        'success' => false,
+        'message' => 'Failed to verify hotel'
+    ]);
+    exit;
+}
+
+mysqli_stmt_bind_param($checkHotelStmt, "i", $hotel_id);
+mysqli_stmt_execute($checkHotelStmt);
+$checkHotel = mysqli_stmt_get_result($checkHotelStmt);
 
 if (!$checkHotel || mysqli_num_rows($checkHotel) === 0) {
     echo json_encode([
@@ -53,6 +65,7 @@ $sql = "
         r.hotel_id,
         r.vendor_id,
         r.name,
+        r.total_rooms,
         r.type,
         r.status,
         r.price,
@@ -61,31 +74,40 @@ $sql = "
         r.amenities,
         r.image_url,
         r.created_at
-    FROM rooms r
-    WHERE r.hotel_id = ?
-      AND r.status = 'available'
 ";
 
-$params = [$hotel_id];
-$types = "i";
+$params = [];
+$types = "";
 
 if ($useDateFilter) {
-    $sql .= "
-      AND r.room_id NOT IN (
-          SELECT br.room_id
-          FROM booking_rooms br
-          INNER JOIN bookings b ON b.booking_id = br.booking_id
-          WHERE b.status IN ('confirmed', 'checked_in')
-            AND (? < b.check_out)
-            AND (? > b.check_in)
-      )
+    $sql .= ",
+        (
+            SELECT COUNT(*)
+            FROM booking_rooms br
+            INNER JOIN bookings b ON b.booking_id = br.booking_id
+            WHERE br.room_id = r.room_id
+              AND b.status IN ('confirmed', 'checked_in')
+              AND (? < b.check_out)
+              AND (? > b.check_in)
+        ) AS booked_rooms
     ";
     $params[] = $check_in;
     $params[] = $check_out;
     $types .= "ss";
+} else {
+    $sql .= ",
+        0 AS booked_rooms
+    ";
 }
 
-$sql .= " ORDER BY r.price ASC, r.room_id DESC";
+$sql .= "
+    FROM rooms r
+    WHERE r.hotel_id = ?
+    ORDER BY r.type ASC, r.price ASC, r.room_id ASC
+";
+
+$params[] = $hotel_id;
+$types .= "i";
 
 $stmt = mysqli_prepare($con, $sql);
 
@@ -118,25 +140,53 @@ while ($row = mysqli_fetch_assoc($result)) {
 
     $row['price'] = (float) $row['price'];
     $row['capacity'] = (int) $row['capacity'];
+    $row['total_rooms'] = max(1, (int) ($row['total_rooms'] ?? 1));
+    $row['booked_rooms'] = max(0, (int) ($row['booked_rooms'] ?? 0));
+
+    if ($row['booked_rooms'] > $row['total_rooms']) {
+        $row['booked_rooms'] = $row['total_rooms'];
+    }
+
+    $row['available_rooms'] = max(0, $row['total_rooms'] - $row['booked_rooms']);
+    $row['is_booked_for_dates'] = $row['available_rooms'] <= 0;
+    $row['can_book'] = $row['status'] === 'available' && $row['available_rooms'] > 0;
+
+    if ($row['available_rooms'] <= 0) {
+        $row['availability_label'] = 'Sold out for selected dates';
+    } elseif ($row['available_rooms'] <= 2) {
+        $row['availability_label'] = 'Only ' . $row['available_rooms'] . ' room(s) left';
+    } else {
+        $row['availability_label'] = $row['available_rooms'] . ' room(s) available';
+    }
 
     if (!empty($row['amenities'])) {
-        $row['amenities_array'] = array_values(array_filter(array_map('trim', explode(',', $row['amenities']))));
+        $row['amenities_array'] = array_values(
+            array_filter(array_map('trim', explode(',', $row['amenities'])))
+        );
     } else {
         $row['amenities_array'] = [];
     }
 
     $gallery = [];
-    $imgResult = mysqli_query($con, "
+    $room_id = (int) $row['room_id'];
+
+    $imgStmt = mysqli_prepare($con, "
         SELECT image_id, image_url
         FROM room_images
-        WHERE room_id = '{$row['room_id']}'
+        WHERE room_id = ?
         ORDER BY image_id DESC
     ");
 
-    if ($imgResult) {
-        while ($img = mysqli_fetch_assoc($imgResult)) {
-            if (!empty($img['image_url']) && file_exists(__DIR__ . '/../' . $img['image_url'])) {
-                $gallery[] = $img;
+    if ($imgStmt) {
+        mysqli_stmt_bind_param($imgStmt, "i", $room_id);
+        mysqli_stmt_execute($imgStmt);
+        $imgResult = mysqli_stmt_get_result($imgStmt);
+
+        if ($imgResult) {
+            while ($img = mysqli_fetch_assoc($imgResult)) {
+                if (!empty($img['image_url']) && file_exists(__DIR__ . '/../' . $img['image_url'])) {
+                    $gallery[] = $img;
+                }
             }
         }
     }
@@ -157,7 +207,6 @@ while ($row = mysqli_fetch_assoc($result)) {
     }
 
     $row['gallery'] = $gallery;
-
     $data[] = $row;
 }
 
