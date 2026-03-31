@@ -40,10 +40,22 @@ if (!$vendor_id) {
     exit;
 }
 
-$check = mysqli_query(
+$checkStmt = mysqli_prepare(
     $con,
-    "SELECT hotel_id FROM hotels WHERE hotel_id='$hotel_id' AND vendor_id='$vendor_id' LIMIT 1"
+    "SELECT hotel_id FROM hotels WHERE hotel_id = ? AND vendor_id = ? LIMIT 1"
 );
+
+if (!$checkStmt) {
+    echo json_encode([
+        'success' => false,
+        'message' => 'Failed to verify hotel ownership'
+    ]);
+    exit;
+}
+
+mysqli_stmt_bind_param($checkStmt, "ii", $hotel_id, $vendor_id);
+mysqli_stmt_execute($checkStmt);
+$check = mysqli_stmt_get_result($checkStmt);
 
 if (!$check || mysqli_num_rows($check) === 0) {
     echo json_encode([
@@ -53,12 +65,39 @@ if (!$check || mysqli_num_rows($check) === 0) {
     exit;
 }
 
-$sql = "SELECT room_id, hotel_id, vendor_id, name, type, status, price, capacity, description, amenities, image_url, created_at
-        FROM rooms
-        WHERE hotel_id='$hotel_id' AND vendor_id='$vendor_id'
-        ORDER BY room_id DESC";
+$sql = "
+    SELECT
+        room_id,
+        hotel_id,
+        vendor_id,
+        name,
+        total_rooms,
+        type,
+        status,
+        price,
+        capacity,
+        description,
+        amenities,
+        image_url,
+        created_at
+    FROM rooms
+    WHERE hotel_id = ? AND vendor_id = ?
+    ORDER BY room_id DESC
+";
 
-$result = mysqli_query($con, $sql);
+$stmt = mysqli_prepare($con, $sql);
+
+if (!$stmt) {
+    echo json_encode([
+        'success' => false,
+        'message' => 'Database prepare error: ' . mysqli_error($con)
+    ]);
+    exit;
+}
+
+mysqli_stmt_bind_param($stmt, "ii", $hotel_id, $vendor_id);
+mysqli_stmt_execute($stmt);
+$result = mysqli_stmt_get_result($stmt);
 
 if (!$result) {
     echo json_encode([
@@ -77,21 +116,28 @@ while ($row = mysqli_fetch_assoc($result)) {
 
     $row['price'] = (float) $row['price'];
     $row['capacity'] = (int) $row['capacity'];
+    $row['total_rooms'] = max(1, (int) ($row['total_rooms'] ?? 1));
 
     $gallery = [];
     $room_id = (int) $row['room_id'];
 
-    $imgSql = "SELECT image_id, room_id, image_url, created_at
-               FROM room_images
-               WHERE room_id='$room_id'
-               ORDER BY image_id DESC";
+    $imgStmt = mysqli_prepare($con, "
+        SELECT image_id, room_id, image_url, created_at
+        FROM room_images
+        WHERE room_id = ?
+        ORDER BY image_id DESC
+    ");
 
-    $imgResult = mysqli_query($con, $imgSql);
+    if ($imgStmt) {
+        mysqli_stmt_bind_param($imgStmt, "i", $room_id);
+        mysqli_stmt_execute($imgStmt);
+        $imgResult = mysqli_stmt_get_result($imgStmt);
 
-    if ($imgResult) {
-        while ($imgRow = mysqli_fetch_assoc($imgResult)) {
-            if (!empty($imgRow['image_url']) && file_exists(__DIR__ . '/../' . $imgRow['image_url'])) {
-                $gallery[] = $imgRow;
+        if ($imgResult) {
+            while ($imgRow = mysqli_fetch_assoc($imgResult)) {
+                if (!empty($imgRow['image_url']) && file_exists(__DIR__ . '/../' . $imgRow['image_url'])) {
+                    $gallery[] = $imgRow;
+                }
             }
         }
     }
@@ -114,7 +160,6 @@ while ($row = mysqli_fetch_assoc($result)) {
     }
 
     $row['gallery'] = $gallery;
-
     $rooms[] = $row;
 }
 
