@@ -36,15 +36,15 @@ $check_out = trim($_POST['check_out']);
 $adults = (int) $_POST['adults'];
 $children = (int) $_POST['children'];
 
-$room_ids = $_POST['room_ids'];
-if (!is_array($room_ids)) {
-    $room_ids = [$room_ids];
+$room_ids_raw = $_POST['room_ids'];
+if (!is_array($room_ids_raw)) {
+    $room_ids_raw = [$room_ids_raw];
 }
 
-$room_ids = array_values(array_unique(array_map('intval', $room_ids)));
-$room_ids = array_filter($room_ids, fn($id) => $id > 0);
+$room_ids_raw = array_map('intval', $room_ids_raw);
+$room_ids_raw = array_values(array_filter($room_ids_raw, fn($id) => $id > 0));
 
-if (count($room_ids) === 0 || !$check_in || !$check_out) {
+if (count($room_ids_raw) === 0 || !$check_in || !$check_out) {
     echo json_encode([
         "success" => false,
         "message" => "All booking fields are required"
@@ -98,14 +98,23 @@ if (
     exit;
 }
 
-$rooms_requested = count($room_ids);
+$rooms_requested = count($room_ids_raw);
 $total_guests = $adults + $children;
 
-$placeholders = implode(',', array_fill(0, $rooms_requested, '?'));
-$types = str_repeat('i', $rooms_requested);
+$requestedByRoomId = [];
+foreach ($room_ids_raw as $rid) {
+    if (!isset($requestedByRoomId[$rid])) {
+        $requestedByRoomId[$rid] = 0;
+    }
+    $requestedByRoomId[$rid]++;
+}
+
+$unique_room_ids = array_keys($requestedByRoomId);
+$placeholders = implode(',', array_fill(0, count($unique_room_ids), '?'));
+$types = str_repeat('i', count($unique_room_ids));
 
 $sqlRooms = "
-    SELECT room_id, hotel_id, name, price, status, capacity, image_url, type
+    SELECT room_id, hotel_id, name, price, status, capacity, image_url, type, total_rooms
     FROM rooms
     WHERE room_id IN ($placeholders)
 ";
@@ -120,14 +129,14 @@ if (!$stmtRooms) {
     exit;
 }
 
-mysqli_stmt_bind_param($stmtRooms, $types, ...$room_ids);
+mysqli_stmt_bind_param($stmtRooms, $types, ...$unique_room_ids);
 mysqli_stmt_execute($stmtRooms);
 $resultRooms = mysqli_stmt_get_result($stmtRooms);
 
-if (!$resultRooms || mysqli_num_rows($resultRooms) !== $rooms_requested) {
+if (!$resultRooms || mysqli_num_rows($resultRooms) !== count($unique_room_ids)) {
     echo json_encode([
         "success" => false,
-        "message" => "One or more selected rooms are invalid"
+        "message" => "One or more selected room types are invalid"
     ]);
     exit;
 }
@@ -138,10 +147,14 @@ $total_capacity = 0;
 $total_price_per_night = 0;
 
 while ($row = mysqli_fetch_assoc($resultRooms)) {
-    if ($row['status'] === 'maintenance') {
+    $rid = (int) $row['room_id'];
+    $requestedQty = (int) ($requestedByRoomId[$rid] ?? 0);
+    $total_rooms = max(1, (int) ($row['total_rooms'] ?? 1));
+
+    if ($row['status'] !== 'available') {
         echo json_encode([
             "success" => false,
-            "message" => "One of the selected rooms is under maintenance"
+            "message" => "{$row['name']} is not available for booking"
         ]);
         exit;
     }
@@ -151,13 +164,24 @@ while ($row = mysqli_fetch_assoc($resultRooms)) {
     } elseif ($hotel_id !== (int) $row['hotel_id']) {
         echo json_encode([
             "success" => false,
-            "message" => "All selected rooms must belong to the same hotel"
+            "message" => "All selected room types must belong to the same hotel"
         ]);
         exit;
     }
 
-    $total_capacity += (int) ($row['capacity'] ?? 1);
-    $total_price_per_night += (float) $row['price'];
+    if ($requestedQty > $total_rooms) {
+        echo json_encode([
+            "success" => false,
+            "message" => "Requested quantity exceeds total rooms for {$row['name']}"
+        ]);
+        exit;
+    }
+
+    $total_capacity += ((int) ($row['capacity'] ?? 1)) * $requestedQty;
+    $total_price_per_night += ((float) $row['price']) * $requestedQty;
+
+    $row['requested_qty'] = $requestedQty;
+    $row['total_rooms'] = $total_rooms;
     $rooms[] = $row;
 }
 
@@ -169,45 +193,6 @@ if ($total_guests > $total_capacity) {
     exit;
 }
 
-/* overlap check for every selected room */
-$sqlOverlap = "
-    SELECT 1
-    FROM booking_rooms br
-    INNER JOIN bookings b ON b.booking_id = br.booking_id
-    WHERE br.room_id = ?
-      AND b.status IN ('confirmed', 'checked_in')
-      AND (? < b.check_out)
-      AND (? > b.check_in)
-    LIMIT 1
-";
-
-$stmtOverlap = mysqli_prepare($con, $sqlOverlap);
-
-if (!$stmtOverlap) {
-    echo json_encode([
-        "success" => false,
-        "message" => "Failed to prepare overlap query"
-    ]);
-    exit;
-}
-
-foreach ($rooms as $room) {
-    $rid = (int) $room['room_id'];
-
-    mysqli_stmt_bind_param($stmtOverlap, "iss", $rid, $check_in, $check_out);
-    mysqli_stmt_execute($stmtOverlap);
-    $resultOverlap = mysqli_stmt_get_result($stmtOverlap);
-
-    if ($resultOverlap && mysqli_num_rows($resultOverlap) > 0) {
-        echo json_encode([
-            "success" => false,
-            "message" => "One of the selected rooms is already booked for the selected dates"
-        ]);
-        exit;
-    }
-}
-
-/* calculate nights */
 $start = new DateTime($check_in);
 $end = new DateTime($check_out);
 $diff = $start->diff($end);
@@ -226,6 +211,44 @@ $total_price = $nights * $total_price_per_night;
 mysqli_begin_transaction($con);
 
 try {
+    $sqlOverlapCount = "
+        SELECT COUNT(*) AS booked_count
+        FROM booking_rooms br
+        INNER JOIN bookings b ON b.booking_id = br.booking_id
+        WHERE br.room_id = ?
+          AND b.status IN ('confirmed', 'checked_in')
+          AND (? < b.check_out)
+          AND (? > b.check_in)
+    ";
+
+    $stmtOverlap = mysqli_prepare($con, $sqlOverlapCount);
+
+    if (!$stmtOverlap) {
+        throw new Exception("Failed to prepare overlap query");
+    }
+
+    foreach ($rooms as $room) {
+        $rid = (int) $room['room_id'];
+        $requestedQty = (int) $room['requested_qty'];
+        $totalRooms = (int) $room['total_rooms'];
+
+        mysqli_stmt_bind_param($stmtOverlap, "iss", $rid, $check_in, $check_out);
+        mysqli_stmt_execute($stmtOverlap);
+        $resultOverlap = mysqli_stmt_get_result($stmtOverlap);
+
+        $bookedCount = 0;
+        if ($resultOverlap) {
+            $overlapRow = mysqli_fetch_assoc($resultOverlap);
+            $bookedCount = (int) ($overlapRow['booked_count'] ?? 0);
+        }
+
+        $availableCount = max(0, $totalRooms - $bookedCount);
+
+        if ($requestedQty > $availableCount) {
+            throw new Exception("Only {$availableCount} room(s) available for {$room['name']} in the selected dates");
+        }
+    }
+
     $sqlInsertBooking = "
         INSERT INTO bookings (
             user_id,
@@ -278,17 +301,20 @@ try {
     foreach ($rooms as $room) {
         $rid = (int) $room['room_id'];
         $price_per_night = (float) $room['price'];
+        $requestedQty = (int) $room['requested_qty'];
 
-        mysqli_stmt_bind_param(
-            $stmtInsertBookingRoom,
-            "iid",
-            $booking_id,
-            $rid,
-            $price_per_night
-        );
+        for ($i = 0; $i < $requestedQty; $i++) {
+            mysqli_stmt_bind_param(
+                $stmtInsertBookingRoom,
+                "iid",
+                $booking_id,
+                $rid,
+                $price_per_night
+            );
 
-        if (!mysqli_stmt_execute($stmtInsertBookingRoom)) {
-            throw new Exception("Failed to save selected rooms");
+            if (!mysqli_stmt_execute($stmtInsertBookingRoom)) {
+                throw new Exception("Failed to save booked room item");
+            }
         }
     }
 
@@ -297,20 +323,12 @@ try {
     echo json_encode([
         "success" => true,
         "message" => "Rooms booked successfully",
-        "data" => [
-            "booking_id" => $booking_id,
-            "room_ids" => array_map(fn($r) => (int) $r['room_id'], $rooms),
-            "check_in" => $check_in,
-            "check_out" => $check_out,
-            "adults" => $adults,
-            "children" => $children,
-            "rooms_requested" => $rooms_requested,
-            "nights" => $nights,
-            "total_price" => $total_price,
-            "status" => "confirmed"
-        ]
+        "booking_id" => $booking_id,
+        "rooms_requested" => $rooms_requested,
+        "nights" => $nights,
+        "total_price" => $total_price
     ]);
-} catch (Exception $e) {
+} catch (Throwable $e) {
     mysqli_rollback($con);
 
     echo json_encode([
