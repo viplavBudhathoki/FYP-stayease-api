@@ -1,11 +1,13 @@
 <?php
 include __DIR__ . '/../helpers/connection.php';
+include __DIR__ . '/../helpers/offer_helper.php';
 
 header("Content-Type: application/json; charset=UTF-8");
 
 $hotel_id = isset($_POST['hotel_id']) ? (int) $_POST['hotel_id'] : 0;
 $check_in = isset($_POST['check_in']) ? trim($_POST['check_in']) : '';
 $check_out = isset($_POST['check_out']) ? trim($_POST['check_out']) : '';
+$rooms_requested = isset($_POST['rooms_requested']) ? max(1, (int) $_POST['rooms_requested']) : 1;
 
 if ($hotel_id <= 0) {
     echo json_encode([
@@ -43,7 +45,11 @@ if (!$checkHotel || mysqli_num_rows($checkHotel) === 0) {
     exit;
 }
 
+$hotelInfo = mysqli_fetch_assoc($checkHotel);
+
 $useDateFilter = false;
+$nights = 1;
+
 if ($check_in !== '' && $check_out !== '') {
     $checkInDate = DateTime::createFromFormat('Y-m-d', $check_in);
     $checkOutDate = DateTime::createFromFormat('Y-m-d', $check_out);
@@ -56,6 +62,8 @@ if ($check_in !== '' && $check_out !== '') {
         $check_out > $check_in
     ) {
         $useDateFilter = true;
+        $diff = $checkInDate->diff($checkOutDate);
+        $nights = max(1, (int) $diff->days);
     }
 }
 
@@ -96,7 +104,7 @@ if ($useDateFilter) {
     $types .= "ss";
 } else {
     $sql .= ",
-        0 AS booked_rooms
+        NULL AS booked_rooms
     ";
 }
 
@@ -141,22 +149,38 @@ while ($row = mysqli_fetch_assoc($result)) {
     $row['price'] = (float) $row['price'];
     $row['capacity'] = (int) $row['capacity'];
     $row['total_rooms'] = max(1, (int) ($row['total_rooms'] ?? 1));
-    $row['booked_rooms'] = max(0, (int) ($row['booked_rooms'] ?? 0));
+    $row['is_under_maintenance'] = $row['status'] === 'maintenance';
 
-    if ($row['booked_rooms'] > $row['total_rooms']) {
-        $row['booked_rooms'] = $row['total_rooms'];
-    }
+    if ($useDateFilter) {
+        $row['booked_rooms'] = max(0, (int) ($row['booked_rooms'] ?? 0));
 
-    $row['available_rooms'] = max(0, $row['total_rooms'] - $row['booked_rooms']);
-    $row['is_booked_for_dates'] = $row['available_rooms'] <= 0;
-    $row['can_book'] = $row['status'] === 'available' && $row['available_rooms'] > 0;
+        if ($row['booked_rooms'] > $row['total_rooms']) {
+            $row['booked_rooms'] = $row['total_rooms'];
+        }
 
-    if ($row['available_rooms'] <= 0) {
-        $row['availability_label'] = 'Sold out for selected dates';
-    } elseif ($row['available_rooms'] <= 2) {
-        $row['availability_label'] = 'Only ' . $row['available_rooms'] . ' room(s) left';
+        $row['available_rooms'] = max(0, $row['total_rooms'] - $row['booked_rooms']);
+        $row['is_booked_for_dates'] = !$row['is_under_maintenance'] && $row['available_rooms'] <= 0;
+        $row['can_book'] = !$row['is_under_maintenance'] && $row['available_rooms'] > 0;
+        $row['has_checked_dates'] = true;
+
+        if ($row['is_under_maintenance']) {
+            $row['availability_label'] = 'Under maintenance';
+        } elseif ($row['available_rooms'] <= 0) {
+            $row['availability_label'] = 'Sold out for selected dates';
+        } elseif ($row['available_rooms'] <= 2) {
+            $row['availability_label'] = 'Only ' . $row['available_rooms'] . ' room(s) left';
+        } else {
+            $row['availability_label'] = $row['available_rooms'] . ' room(s) available';
+        }
     } else {
-        $row['availability_label'] = $row['available_rooms'] . ' room(s) available';
+        $row['booked_rooms'] = null;
+        $row['available_rooms'] = null;
+        $row['is_booked_for_dates'] = false;
+        $row['can_book'] = false;
+        $row['has_checked_dates'] = false;
+        $row['availability_label'] = $row['is_under_maintenance']
+            ? 'Under maintenance'
+            : 'Select travel dates to check availability';
     }
 
     if (!empty($row['amenities'])) {
@@ -207,14 +231,101 @@ while ($row = mysqli_fetch_assoc($result)) {
     }
 
     $row['gallery'] = $gallery;
+
+    $originalPrice = (float) $row['price'];
+
+    $bestOffer = getBestApplicableOffer(
+        $con,
+        (int) $row['hotel_id'],
+        (int) $row['room_id'],
+        $check_in,
+        $check_out,
+        $nights,
+        $rooms_requested
+    );
+
+    $promoOffer = getBestPromoOffer(
+        $con,
+        (int) $row['hotel_id'],
+        (int) $row['room_id'],
+        $check_in,
+        $check_out
+    );
+
+    $finalPrice = $originalPrice;
+    $pricingBreakdown = null;
+
+    if ($bestOffer && $useDateFilter) {
+        $pricingBreakdown = buildPartialOfferPricing(
+            $originalPrice,
+            $bestOffer,
+            $check_in,
+            $check_out,
+            1
+        );
+
+        $formattedAppliedOffer = formatOfferForResponse($bestOffer, $originalPrice);
+        $formattedAppliedOffer['pricing_breakdown'] = $pricingBreakdown;
+
+        if (($pricingBreakdown['overlap_nights'] ?? 0) > 0) {
+            if (!empty($pricingBreakdown['is_fully_discounted'])) {
+                $finalPrice = (float) $formattedAppliedOffer['final_price'];
+            } else {
+                $finalPrice = round(
+                    (float) $pricingBreakdown['total_price'] / max(1, (int) $pricingBreakdown['total_nights']),
+                    2
+                );
+            }
+        }
+
+        $row['offer'] = $formattedAppliedOffer;
+        $row['has_offer'] = (($pricingBreakdown['overlap_nights'] ?? 0) > 0);
+        $row['offer_applicable'] = (($pricingBreakdown['overlap_nights'] ?? 0) > 0);
+        $row['offer_note'] = !empty($pricingBreakdown) && empty($pricingBreakdown['is_fully_discounted'])
+            ? 'Discount applies for ' . (int) $pricingBreakdown['overlap_nights'] . ' of ' . (int) $pricingBreakdown['total_nights'] . ' night(s)'
+            : null;
+    } else {
+        $row['offer'] = null;
+        $row['has_offer'] = false;
+        $row['offer_applicable'] = false;
+        $row['offer_note'] = null;
+    }
+
+    if ($promoOffer) {
+        $row['promo_offer'] = formatOfferForResponse($promoOffer, $originalPrice);
+        $row['has_promo_offer'] = true;
+
+        if (!$row['has_offer']) {
+            $row['offer_note'] = buildOfferEligibilityMessage(
+                $promoOffer,
+                $nights,
+                $rooms_requested,
+                $check_in,
+                $check_out
+            );
+        }
+    } else {
+        $row['promo_offer'] = null;
+        $row['has_promo_offer'] = false;
+    }
+
+    $row['original_price'] = $originalPrice;
+    $row['final_price'] = $finalPrice;
+    $row['pricing_breakdown'] = $pricingBreakdown;
+
     $data[] = $row;
 }
 
 echo json_encode([
     'success' => true,
     'hotel_id' => $hotel_id,
+    'hotel_name' => $hotelInfo['name'],
+    'hotel_location' => $hotelInfo['location'],
     'check_in' => $check_in,
     'check_out' => $check_out,
+    'nights' => $nights,
+    'rooms_requested' => $rooms_requested,
+    'has_checked_dates' => $useDateFilter,
     'count' => count($data),
     'data' => $data
 ]);
