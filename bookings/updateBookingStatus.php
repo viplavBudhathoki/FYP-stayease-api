@@ -2,6 +2,7 @@
 
 include __DIR__ . '/../helpers/connection.php';
 include __DIR__ . '/../helpers/auth.php';
+include __DIR__ . '/../helpers/notification_helper.php';
 
 header("Content-Type: application/json; charset=UTF-8");
 
@@ -49,14 +50,14 @@ if (!in_array($new_status, $allowed_statuses, true)) {
 $sqlCheck = "
     SELECT 
         b.booking_id,
-        b.status,
-        COUNT(br.room_id) AS room_count
+        b.user_id,
+        b.status
     FROM bookings b
     INNER JOIN booking_rooms br ON br.booking_id = b.booking_id
     INNER JOIN rooms r ON r.room_id = br.room_id
     WHERE b.booking_id = ?
       AND r.vendor_id = ?
-    GROUP BY b.booking_id, b.status
+    GROUP BY b.booking_id, b.user_id, b.status
     LIMIT 1
 ";
 
@@ -84,6 +85,7 @@ if (!$resultCheck || mysqli_num_rows($resultCheck) === 0) {
 
 $booking = mysqli_fetch_assoc($resultCheck);
 $current_status = $booking['status'];
+$customer_id = (int) ($booking['user_id'] ?? 0);
 
 if ($current_status === 'cancelled') {
     echo json_encode([
@@ -139,17 +141,16 @@ try {
         throw new Exception("Failed to update booking status");
     }
 
-    $new_room_status = null;
-
-    if ($new_status === 'checked_in') {
-        $new_room_status = 'occupied';
-    } elseif ($new_status === 'completed' || $new_status === 'cancelled') {
-        $new_room_status = 'available';
-    }
-
-    if ($new_room_status !== null) {
+    /**
+     * Sync room operational status carefully for room-type inventory design.
+     * Rule:
+     * - maintenance stays untouched
+     * - checked_in => occupied
+     * - completed/cancelled => available ONLY if no other checked_in booking remains
+     */
+    if (in_array($new_status, ['checked_in', 'completed', 'cancelled'], true)) {
         $sqlGetRooms = "
-            SELECT r.room_id, r.status
+            SELECT DISTINCT r.room_id, r.status
             FROM booking_rooms br
             INNER JOIN rooms r ON r.room_id = br.room_id
             WHERE br.booking_id = ?
@@ -177,6 +178,20 @@ try {
             throw new Exception("Failed to prepare room update");
         }
 
+        $sqlActiveCheckedIn = "
+            SELECT COUNT(*) AS active_checked_in_count
+            FROM booking_rooms br
+            INNER JOIN bookings b ON b.booking_id = br.booking_id
+            WHERE br.room_id = ?
+              AND b.status = 'checked_in'
+        ";
+
+        $stmtActiveCheckedIn = mysqli_prepare($con, $sqlActiveCheckedIn);
+
+        if (!$stmtActiveCheckedIn) {
+            throw new Exception("Failed to prepare active checked-in query");
+        }
+
         while ($room = mysqli_fetch_assoc($resultRooms)) {
             $room_id = (int) $room['room_id'];
             $current_room_status = strtolower(trim($room['status'] ?? ''));
@@ -185,12 +200,71 @@ try {
                 continue;
             }
 
-            mysqli_stmt_bind_param($stmtUpdateRoom, "si", $new_room_status, $room_id);
+            mysqli_stmt_bind_param($stmtActiveCheckedIn, "i", $room_id);
+            mysqli_stmt_execute($stmtActiveCheckedIn);
+            $resultActiveCheckedIn = mysqli_stmt_get_result($stmtActiveCheckedIn);
+
+            $active_checked_in_count = 0;
+            if ($resultActiveCheckedIn) {
+                $activeRow = mysqli_fetch_assoc($resultActiveCheckedIn);
+                $active_checked_in_count = (int) ($activeRow['active_checked_in_count'] ?? 0);
+            }
+
+            $final_room_status = 'available';
+
+            if ($active_checked_in_count > 0) {
+                $final_room_status = 'occupied';
+            }
+
+            mysqli_stmt_bind_param($stmtUpdateRoom, "si", $final_room_status, $room_id);
             $resultRoom = mysqli_stmt_execute($stmtUpdateRoom);
 
             if (!$resultRoom) {
                 throw new Exception("Failed to update room status");
             }
+        }
+    }
+
+    if ($customer_id > 0) {
+        $title = "Booking Status Updated";
+        $message = "Your booking #{$booking_id} status has been updated to {$new_status}.";
+        $notification_type = "booking_update";
+
+        if ($new_status === 'checked_in') {
+            $title = "Checked In Successfully";
+            $message = "Your booking #{$booking_id} has been checked in.";
+            $notification_type = "check_in";
+        } elseif ($new_status === 'completed') {
+            $title = "Stay Completed";
+            $message = "Your booking #{$booking_id} has been completed successfully.";
+            $notification_type = "check_out";
+        } elseif ($new_status === 'cancelled') {
+            $title = "Booking Cancelled";
+            $message = "Your booking #{$booking_id} has been cancelled by the vendor.";
+            $notification_type = "booking_cancel";
+        }
+
+        createNotification(
+            $con,
+            $customer_id,
+            $title,
+            $message,
+            $notification_type,
+            $booking_id
+        );
+    }
+
+    $adminResult = mysqli_query($con, "SELECT user_id FROM users WHERE role = 'admin'");
+    if ($adminResult) {
+        while ($adminRow = mysqli_fetch_assoc($adminResult)) {
+            createNotification(
+                $con,
+                (int) $adminRow['user_id'],
+                "Vendor Updated Booking Status",
+                "Booking #{$booking_id} status was changed from {$current_status} to {$new_status}.",
+                "system",
+                $booking_id
+            );
         }
     }
 
